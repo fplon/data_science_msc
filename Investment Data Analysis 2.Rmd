@@ -1,0 +1,51 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+filt_retail_data <- select(clean_retail_data, -TotalSales18, -SharesOS, -TreynorRatio)
+filt_indust_data <- select(clean_indust_data, -TotalSales18, -SharesOS, -TreynorRatio)
+```
+
+
+## T Tests
+
+
+```{r}
+t_test_df <- data.frame()
+for (i in 1:19) {
+  metric <- colnames(filt_retail_data)[i]
+  p_val <- t.test(filt_retail_data[[i]], filt_indust_data[[i]])[3]
+  # t_test_df <- t_test_df %>%
+  #   mutate( = p_val)
+  temp <- data.frame(metric, p_val)
+  t_test_df <- rbind(t_test_df, temp)
+}  
+sig <- ifelse(t_test_df$p.value < 0.05, TRUE, FALSE)
+t_test_df <- mutate(t_test_df, sig_5_perc = sig)
+t_test_df$p.value <- round(t_test_df$p.value, 4)
+t_test_df
+
+```
+
+```{r}
+ifelse(t_test_df$p.value < 0.05, TRUE, FALSE)
+```
+
+
+```{r}
+
+par(mfrow=c(4, 5))
+colnames <- colnames(filt_retail_data)
+
+for (i in 1:19) {
+  hgRet = hist(filt_retail_data[[i]], breaks = sqrt(75), plot = FALSE) 
+  hgInd = hist(filt_indust_data[[i]], breaks = sqrt(75), plot = FALSE) 
+  plot(hgRet, main = colnames[i], freq = FALSE, col = 'light pink', xlab = 'Retail = pink, Indust = blue', density = 120) 
+  plot(hgInd, add = TRUE, freq = FALSE, col = 'light blue', xlab = 'Retail = pink, Indust = blue', density = 120) 
+}  
+
+
+```
+

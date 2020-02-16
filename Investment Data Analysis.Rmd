@@ -1,0 +1,1472 @@
+---
+title: "Investment Data"
+output: html_notebook
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(readr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(zoo)
+```
+
+## Step 1) Import the data, add in new variables and handle missing values
+
+```{r}
+retail_data <- read_excel("Data/Investment Data.xlsx", sheet = 1)
+indust_data <- read_excel("Data/Investment Data.xlsx", sheet = 2)
+
+# retail_data[c(3, 11, 12)] <- retail_data[c(3, 11, 12)] / 100 
+# indust_data[c(3, 11, 12)] <- indust_data[c(3, 11, 12)] / 100
+# converting returns to decimals may cause issues in with translations
+
+
+retail_data <- retail_data %>% 
+  mutate(EPS = MktPrice / PERatio) %>%
+  mutate(SharesOS = TotMktCap / MktPrice) %>% # Issues with causality, WON'T USE
+  mutate(Earnings = EPS * SharesOS) %>%
+  mutate(ROCE = (Earnings / CapEmp) * 100) %>%
+  mutate(SPS = TotalSales17 / SharesOS) %>%
+  mutate(TreynorRatio = ((Ret17 - 5) / Beta) * 100) %>% # More useful for portfolio perf
+  mutate(ProfMarg = (Earnings / TotalSales17) * 100) %>%
+  mutate(BookVal = TotMktCap / MktBook) %>%
+  mutate(BVPS = BookVal / SharesOS) %>%
+  # mutate(PayoutRatio = (Dividend / Earnings) * 100)
+  mutate(PayoutRatio = ((1 / DivYield) / EPS) * 100)
+
+
+indust_data <- indust_data %>% 
+  mutate(EPS = MktPrice / PERatio) %>%
+  mutate(SharesOS = TotMktCap / MktPrice) %>% # Issues with causality
+  mutate(Earnings = EPS * SharesOS) %>%
+  mutate(ROCE = (Earnings / CapEmp) * 100) %>%
+  mutate(SPS = TotalSales17 / SharesOS) %>%
+  mutate(TreynorRatio = ((Ret17 - 5) / Beta) * 100) %>% # More useful for portfolio perf
+  mutate(ProfMarg = (Earnings / TotalSales17) * 100) %>%
+  mutate(BookVal = TotMktCap / MktBook) %>%
+  mutate(BVPS = BookVal / SharesOS) %>%
+  # mutate(PayoutRatio = (Dividend / Earnings) * 100) 
+  mutate(PayoutRatio = ((1 / DivYield) / EPS) * 100)
+
+clean_retail_data <- na.omit(retail_data)
+clean_indust_data <- na.omit(indust_data)
+
+# retail_data <- na.aggregate(retail_data) # will artificially reduce variability
+# indust_data <- na.aggregate(indust_data)
+```
+
+```{r}
+filt_retail_data <- select(clean_retail_data, -TotalSales18, -SharesOS, -TreynorRatio)
+filt_indust_data <- select(clean_indust_data, -TotalSales18, -SharesOS, -TreynorRatio)
+
+norm_retail_data <- scale(filt_retail_data)
+norm_indust_data <- scale(filt_indust_data)
+
+norm_retail_data <- as.data.frame(norm_retail_data)
+norm_indust_data <- as.data.frame(norm_indust_data)
+```
+
+
+Using mean values to fill missing values is an option for the purposes of fitting a linear model. Other methods could have involved using zero, a random value, or a regressed value, each of which have their advantages and disadvantages. The advantage here is the ease of finding and applying the mean value. The disadvantage is that it will artificially reduce the variability of each variable with missing values. For example, if a given value is missing due to omission, the value could in reality have been dispersed far from the mean value. Using the mean to proxy for this missing value will then underestimate total variablility for that variable. 
+
+To avoid this issue, I have removed rows with missing data. Issues here is a smaller sample size.
+
+
+## Step 2) Visualise and perform intial exploratory analysis
+
+```{r}
+print(summary(clean_retail_data))
+```
+
+
+Comparing the median and mean values in the above summaries, it appears that many of the variables are positively skewed. Comparing the max values with the mean values also suggests that outliers exist. We will be able to visualise these outliers and skewed distributions by plotting the data.
+
+```{r}
+cor(clean_retail_data$MktPrice, clean_retail_data$TotMktCap)
+cor(clean_retail_data, use = 'complete.obs')[2] # issue with missing values if average is used
+cor(clean_retail_data, use = 'everything')[2]
+```
+```{r}
+cor(clean_retail_data, clean_retail_data$Ret18, use = 'complete.obs')
+```
+
+```{r}
+  
+boxplot(norm_retail_data, las = 2, par(mar = c(8, 3, 2, 2)+ 0.1))
+title(main = "Retail - normalised")
+
+boxplot(norm_indust_data, las = 2, par(mar = c(8, 3, 2, 2)+ 0.1))
+title(main = "Industrial - normalised")
+
+```
+
+https://stats.stackexchange.com/questions/11000/how-does-r-handle-missing-values-in-lm
+
+```{r}
+all_vars <- lm(Ret18 ~ ., data = clean_retail_data) # na.omit vs na.exclude
+
+```
+
+
+
+```{r}
+hist(clean_retail_data$MktPrice, breaks = 10)
+hist(log(clean_retail_data$MktPrice), breaks = 10)
+
+clean_retail_data$MktPrice <- log(clean_retail_data$MktPrice)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="MktPrice"] <- "log_MktPrice"
+
+plot(clean_retail_data$log_MktPrice, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_MktPrice, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+
+
+```
+Before transformation:
+Histogram: appears to be skewed by some observations (2 low price with high return and 1 high price with low return), not normally distributed , lognormal transformation looks promising
+Scatter: The higher values of MktPrice do not appear to be influencing the slope too much
+Residuals v Fitted: relationship appears linear but the variance about 0 are not constant (heteroscedastic)
+Q-Q: the errors do not follow the line well at either end, implying that the distribution is nonnormally distributed
+Scale-Location: the line appears flatter here which implied spread of errors is more evenly distributed than we orignally thought
+Residuals v Leverage: Observations 65 and 14 are approaching the dashed line implying that these observations are influencing the model
+
+LM Summary: The slope of the line is statistically significant (there is a linear relationship between MktPrice and Ret18) as the p-value of 0.0491 < 0.05. MktPrice explains 4% of the variability of Ret18, as explained by R^2. 
+
+Conclusion: MktPrice should be included in initial model but should potentially be transformed lognormally first
+
+
+After transformation:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: Linear relationship
+Residuals v Fitted: linear, equal variance
+Q-Q: normal
+Scale-Location: equal spread
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship with significant p-value
+Conclusion: include in initial model (Rsq 7.9%)
+
+
+
+```{r}
+hist(clean_retail_data$TotMktCap, breaks = 10)
+hist(log(base = 2, clean_retail_data$TotMktCap), breaks = 10)
+
+clean_retail_data$TotMktCap <- log(clean_retail_data$TotMktCap)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="TotMktCap"] <- "log_TotMktCap"
+
+plot(clean_retail_data$log_TotMktCap, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_TotMktCap, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Before transformation:
+Histogram: not normally distributed, lognormal does not resolve this
+Scatter: positive linear relationship
+Fitted v Residuals: somewhat evenly distributed errors, linear 
+Q-Q: many observations appear normally distributed but that breaks down towards the tails
+Scale-Location: looks more heteroscadastic around the lower fitted values
+Residuals v Leverage: A few observations approaching the dashed line but still not very close, some infuence of these observations on the slope
+
+LM Summary: TotMktCap relationship not significant with p value of 0.118 > 0.05. Therefore will not be included in intial model. 
+
+Conclusion: Some other transformation may make this variable suitable for initial model, or it may add explanatory power to a multiple linear regression model in its current form
+
+After transformation:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: Linear relationship
+Residuals v Fitted: linear, equal variance
+Q-Q: normal
+Scale-Location: equal spread
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship but no significant p-value
+Conclusion: will not include in initial model
+
+```{r}
+hist(clean_retail_data$DivYield, breaks = 10)
+hist(log(clean_retail_data$DivYield), breaks = 10)
+hist(1 / clean_retail_data$DivYield, breaks = 10)
+hist(clean_retail_data$DivYield ** (1/2), breaks = 10)
+
+clean_retail_data$DivYield <- clean_retail_data$DivYield ** (1/2)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="DivYield"] <- "sqrt_DivYield"
+
+plot(clean_retail_data$sqrt_DivYield, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_DivYield, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+PRE:
+Histogram: Does not look normally distributed, outlier and multiple peaks, sqrt transformations shows promise
+Scatter: No obvious relationship
+Residuals v Fitted: not strongly linear, errors not equally spread
+Q-Q: Some values drifting from the line in the centre and spreading more at the tails
+Scale-Location: heteroscedastic at the extremes
+Residuals v Leverage: no observations beyond the dashed line, no extreme influnece on relationship
+
+LM Summary: Relationship with Ret18 is not significant with the p-value of 0.484 > 0.05. Not included in initial model.
+
+Conclusion: possible transformation sqrt, not for initial model
+
+POST:
+Histogram: tranformed by square root function and improved normality assumption
+Scatter: weak linear relationship
+Residuals v Fitted: linear, equal variance
+Q-Q: normal
+Scale-Location: equal spread
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship but no significant p-value
+Conclusion: will not include in initial model
+
+```{r}
+hist(clean_retail_data$PERatio, breaks = 10)
+hist(log(clean_retail_data$PERatio), breaks = 10)
+hist(clean_retail_data$PERatio ** (1/2), breaks = 10)
+
+clean_retail_data$PERatio <- log(clean_retail_data$PERatio)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="PERatio"] <- "log_PERatio"
+
+plot(clean_retail_data$log_PERatio, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_PERatio, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+PRE:
+Histogram: PERatio not normally distributed, with outliers causing positive skew. Lognormal transformation does not appear to resolve this. 
+Scatter: No obvious relationship
+Residuals v Fitted: errors not evenly spread, cluster towards higher fitted values makes linear relationship difficult to establish
+Q-Q: shows some obseravtions falling on the line suggesting some normality
+Scale-Location: errors not equally spread
+Residuals v Leverage: Observation 51 could be a candidate for removal or other treatment to see the impact on the relationship
+
+LM Summary:Its relationship with Ret18 is not significant as per the p-value of 0.583 > 0.05. It is not included in our original model. 
+
+Conclusion: Outlier treatment could be an option
+
+POST:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter:linear relationship
+Residuals v Fitted: linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship but no significant p-value
+Conclusion: will not include in initial model
+
+```{r}
+hist(clean_retail_data$Beta, breaks = 10)
+plot(clean_retail_data$Beta, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ Beta, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red',
+lw = 2)
+plot(mod)
+```
+Histogram: normally distributed with the exception of the gap towards the lower values of variable Beta
+Scatter: no obvious or strong relationship as per the fitted line, but no outliers influencing slope
+Residuals v Fitted: shapeless and equally spread above 0, implying linearity and homoscedasticity
+Q-Q: mostly fitted to the line, implying normal distribution
+Scale-Location: The line is mostly flat implying homoscedasticity (equal variance)
+Residuals v Leverage: No points beyond the dashed lines, implying no overly influencial points
+
+LM Summary: negative relationship with Ret18 but not statistically significant with p-value of 0.2 > 0.05. Therefore not included in the initial model
+Conclusion: not included in the initial model, but left for selection in stepwise
+
+
+```{r}
+hist(clean_retail_data$TotalSales17, breaks = 10)
+hist(log(clean_retail_data$TotalSales17), breaks = 10)
+# hist(1 / log10(clean_retail_data$TotalSales17))
+
+clean_retail_data$TotalSales17 <- log(clean_retail_data$TotalSales17)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="TotalSales17"] <- "log_TotalSales17"
+
+plot(clean_retail_data$log_TotalSales17, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_TotalSales17, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+PRE:
+Histogram: does not appear normally distributed, exhibits positive skew due to extreme outliers
+Scatter: no obvious relationship judging by the flat line 
+Residuals v Fitted: concentrated at one end but evenly spread, implying linearity but homoscedasticity unclear
+Q-Q: mostly plotted on the line, implying normally disributed
+Scale-Location: line not flat toward the right side, implying heteroscedasticity 
+Residuals vs Leverage: one point beyond the dashed line, implying the model is influenced by observation number 54 (case for removal)
+
+LM Summary: very weak relationship with Ret18, slope not statistically significant with p-value of 0.666 > 0.05 so it is excluded from the initial model
+
+
+POST:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: weak linear relationship
+Residuals v Fitted: linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship but no significant p-value
+Conclusion: will not include in initial model
+
+
+
+```{r}
+hist(clean_retail_data$CapEmp, breaks = 10)
+hist(log(clean_retail_data$CapEmp), breaks = 10)
+hist(1 / clean_retail_data$CapEmp, breaks = 10)
+
+clean_retail_data$CapEmp <- log(clean_retail_data$CapEmp)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="CapEmp"] <- "log_CapEmp"
+
+plot(clean_retail_data$log_CapEmp, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_CapEmp, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+PRE:
+Histogram: not normally distributed, with most observations grouped together with extreme outliers, transformations possible
+Scatter: No obvious relationship discernable due to extreme outliers
+Residuals v Fitted: difficult to interpret but line not flat, implying heteroscedasticity and nonlinear
+Q-Q: Mostly falling on the plotted line implying mostly normally distributed with exception of outliers
+Scale-Location: line not flat, heteroscedastic
+Residuals v Leverage: points 54 and 61 appear close and/or touching dashed line, implying strong influence on results of the model by these 2 points.
+
+LM Summary: weak relationship with Ret18, and p-value of 0.891 > 0.05, not included in original model
+
+Conclusion: try removing outliers or transform and re-run test
+
+POST:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: weak linear relationship
+Residuals v Fitted: weak linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship but no significant p-value
+Conclusion: will not include in initial model
+
+
+```{r}
+hist(clean_retail_data$Dividend, breaks = 10)
+hist(log(clean_retail_data$Dividend), breaks = 10)
+
+clean_retail_data$Dividend <- log(clean_retail_data$Dividend)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="Dividend"] <- "log_Dividend"
+
+plot(clean_retail_data$log_Dividend, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_Dividend, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+PRE:
+Histogram: some resemblance of normal distribution by log transformation, otherwise skewed by outliers
+Scatter: positive relationship, outlier appears to be reduce slope
+Residuals v Fitted: line not flat and errors not equally distributed, heteroscedastic and nonlinear
+Q-Q: mostly plotted on the line, implying normally disributed with few exceptions
+Scale-Location: line not flat, heteroscedastic 
+Residuals v Leverage: observation 65 strongly infuencing model (similar conclusion to scatter), case for removal
+
+LM summary: Dividend is positively related to Ret18 but p-value of 0.13 > 0.05 so not included in the initial model
+Conclusion: examine the significance of variable Dividend when used in a multiple linear regression model
+
+POST:
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: positive linear relationship
+Residuals v Fitted: weak linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: mostly equal spread of errors
+Residuals v Leverage: no strong outlier issue
+
+LM Summary: positive relationship and significant p-value
+Conclusion: will include in initial model (Rsq 7.4%)
+
+```{r}
+hist(clean_retail_data$MktBook, breaks = 10)
+plot(clean_retail_data$MktBook, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ MktBook, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: outliers, otherwise appears normally distributed
+Scatter: positive linear relationship
+Residuals v Fitted: Linear relationship and mostly equally spread errors
+Q-Q: close or on the ine, some normal distribution
+Scale-Location: mostly homoscedastic
+Residuals v Leverage: Obsevation 14 close to dashed line, strong influence on relationship
+
+LM Summary: positive relationship but p-value of 0.108 > 0.05
+
+Conculsion: Initially excluded from model, but may add explanatory power in MLR model
+
+
+```{r}
+hist(clean_retail_data$Ret17)
+plot(clean_retail_data$Ret17, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ Ret17, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: appears normally distributed
+Scatter: appears to be no strong relationship
+Residuals v Fitted: No strong linear relationship, fairly even spread of errors though
+Q-Q: Mostly normally distributed
+Scale-Location: mostly even spread of errors
+Residuals v Leverage: no strong influence
+
+LM Summary: no relationship, p-value 0.9979 > 0.05
+
+Conclusion: Unlikely to add explanatory power
+
+
+```{r}
+hist(clean_retail_data$EPS, breaks = 10)
+hist(log(clean_retail_data$EPS), breaks = 10)
+
+clean_retail_data$EPS <- log(clean_retail_data$EPS)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="EPS"] <- "log_EPS"
+
+plot(clean_retail_data$log_EPS, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_EPS, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: ransformed lognormally and appears more normally distributed
+Scatter: positive linear relationship
+Residuals v Fitted: even spread, linear
+Q-Q: mostly normal
+Scale-Location: partly heteroscedastic with lower fitted values
+Residuals v Leverage: no extreme influence
+
+LM summary: Positive relationship with p-value < 0.05
+Conclusion: to be included in intial model (Rsq 9.3%)
+
+
+
+```{r}
+hist(clean_retail_data$Earnings, breaks = 10)
+hist(clean_retail_data$Earnings ** (1/2), breaks = 10)
+
+clean_retail_data$Earnings <- clean_retail_data$Earnings ** (1/2)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="Earnings"] <- "sqrt_Earnings"
+
+plot(clean_retail_data$sqrt_Earnings, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_Earnings, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: tranformed by square root and improved normal distribution
+Scatter: linear realtionship
+Fitted v Residuals: linear, fairly even spread of errors
+Q-Q: normal
+Scale-Location: not even spread at lower fitted values
+Fitted v Leverage: no influencial outliers
+
+LM Summary: positive relationship, not statistically significant
+
+Conclusion: will not include in initial model
+
+
+```{r}
+hist(clean_retail_data$ROCE, breaks = 10)
+hist(clean_retail_data$ROCE ** (1/2), breaks = 10)
+
+clean_retail_data$ROCE <- clean_retail_data$ROCE ** (1/2)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="ROCE"] <- "sqrt_ROCE"
+
+plot(clean_retail_data$sqrt_ROCE, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_ROCE, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: tranformed by square root and improved normal distribution
+Scatter: Linear relationship
+Residuals v Fitted: linear, equal variance
+Q-Q: normal
+Scale-Location: equal spread
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship with significant p-value
+Conclusion: include in initial model (Rsq 10.16%)
+
+```{r}
+hist(clean_retail_data$SPS, breaks = 10)
+hist(log(clean_retail_data$SPS), breaks = 10)
+
+clean_retail_data$SPS<- log(clean_retail_data$SPS)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="SPS"] <- "log_SPS"
+
+plot(clean_retail_data$log_SPS, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_SPS, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+
+
+
+```{r}
+hist(clean_retail_data$ProfMarg, breaks = 10)
+hist(clean_retail_data$ProfMarg ** (1/3), breaks = 10)
+hist(log(clean_retail_data$ProfMarg), breaks = 10)
+
+clean_retail_data$ProfMarg<- log(clean_retail_data$ProfMarg)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="ProfMarg"] <- "log_ProfMarg"
+
+plot(clean_retail_data$log_ProfMarg, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_ProfMarg, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship and statistically significant
+
+Conclusion: Included in intial model (Rsq = 8.3%)
+
+```{r}
+hist(clean_retail_data$BookVal, breaks = 10)
+hist(log(clean_retail_data$BookVal), breaks = 10)
+
+clean_retail_data$BookVal <- log(clean_retail_data$BookVal)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="BookVal"] <- "log_BookVal"
+
+plot(clean_retail_data$log_BookVal, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_BookVal, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, somewhat even spread of errors
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+```{r}
+hist(clean_retail_data$BVPS, breaks = 10)
+hist(log(clean_retail_data$BVPS), breaks = 10)
+hist(clean_retail_data$BVPS ** (1/3), breaks = 10)
+
+clean_retail_data$BVPS <- clean_retail_data$BVPS ** (1/3)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="BVPS"] <- "cbrt_BVPS"
+
+plot(clean_retail_data$cbrt_BVPS, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ cbrt_BVPS, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: cube root transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but just not statistically significant
+
+Conclusion: Not included in intial model
+
+```{r}
+hist(clean_retail_data$PayoutRatio, breaks = 10)
+hist(log(clean_retail_data$PayoutRatio), breaks = 10)
+
+clean_retail_data$PayoutRatio <- log(clean_retail_data$PayoutRatio)
+colnames(clean_retail_data)[colnames(clean_retail_data)=="PayoutRatio"] <- "log_PayoutRatio"
+
+plot(clean_retail_data$log_PayoutRatio, clean_retail_data$Ret18)
+mod <- lm(Ret18 ~ log_PayoutRatio, data = clean_retail_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormaltransformation improved normal distribution to an extent (still issues)
+Scatter: some linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors, heteroscedastic at points
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: negative relationship and statistically significant
+
+Conclusion: included in intial model
+
+
+
+## Initial Model 
+
+Variables to be used in the initial model are:
+log_MktPrice, log_Dividend, log_EPS, sqrt_ROCE, log_ProfMarg, log_PayoutRatio
+
+Top Simple Linear Regression model is using sqrt_ROCE with Rsq > 10%
+
+Rsq in that order above are: 
+7.9, 7.4, 9.3, 10.2, 8.3, 7.6
+
+There may be collinearity between dependent variables:
+
+```{r}
+plot(clean_retail_data[c('log_MktPrice', 'log_Dividend', 'log_EPS', 
+                         'sqrt_ROCE', 'log_ProfMarg', 'log_PayoutRatio', 'Ret18')])
+```
+
+
+```{r}
+cor(clean_retail_data[c('log_MktPrice', 'log_Dividend', 'log_EPS', 
+                         'sqrt_ROCE', 'log_ProfMarg', 'log_PayoutRatio', 'Ret18')])
+```
+
+- sqrt_ROCE and log_ProfMarg showing strong correlation
+- log_MktPrice and log_EPS showing strong correlation
+- log_Dividend and log_EPS showing strong correlation
+
+we could try to aggregate these values together somehow, or delete
+
+Splitting the data into Training and Test samples
+```{r}
+retail_smp_size <- floor(0.6 * nrow(clean_retail_data))
+
+set.seed(7)
+train_index <- sample(seq_len(nrow(clean_retail_data)), size = retail_smp_size)
+
+train_retail <- clean_retail_data[train_index, ]
+test_retail <- clean_retail_data[-train_index, ]
+
+test_retail
+```
+
+
+
+with no deletion:
+
+```{r}
+initial_mod <- lm(Ret18 ~ log_MktPrice + log_Dividend + log_EPS + sqrt_ROCE + log_ProfMarg + log_PayoutRatio, data = train_retail)
+summary(initial_mod)
+```
+Adj Rsq of 0.29
+
+
+
+Keeping the 2 highest Rsq variables that have a relatively lower correlation with each other:
+log_EPS and sqrt_ROCE
+
+```{r}
+second_mod <- lm(Ret18 ~ log_EPS + sqrt_ROCE, data = train_retail)
+summary(second_mod)
+```
+No improvement on intital model
+
+Keeping the 2 initial ariables that have the lowest correlation with each other:
+log_MktPrice and sqrt_ROCE
+
+```{r}
+third_mod <- lm(Ret18 ~ log_MktPrice + sqrt_ROCE, data = train_retail)
+summary(third_mod)
+```
+Better than the second model but no improvement on the initial model. 
+
+Despite the issues with collinearity, we will proceed with the initial model and then use a stepwise regression to refine the variables further to achieve the highest Rsq possible
+```{r}
+formula(clean_retail_data)
+```
+
+
+## Stepwise Model
+```{r}
+all_vars <- lm(Ret18 ~ ., data = clean_retail_data)
+step(initial_mod, direction = 'both', scope = formula(all_vars))
+
+
+```
+Interestingly, the stepwise rgression removed EPS and Dividend from the model and added no other variables. Also interesting is the negative coefficient for Profit Margin, which can be translated as saying that lower profit margins explain higher returns the following year. A possible explanation could be that low profit margins in one year will lower the share price in that year, perhaps below their intrinsic value. A positive return the following year could be boosted by the share price returning to its intrinsic value. 
+
+
+```{r}
+retail_train_model <- lm(formula = Ret18 ~ log_MktPrice + sqrt_ROCE + log_ProfMarg, data = train_retail)
+summary(retail_train_model)
+plot(retail_train_model)
+```
+
+The adjusted Rsq has increased from 0.2904 in the initial model to 0.3329 in the final model. Let's see how the test set performs.
+
+## Prediction
+
+```{r}
+retail_prediction <- predict(object = retail_train_model, newdata = test_retail)
+retail_prediction_ci <- predict(object = retail_train_model, newdata = test_retail, interval = 'confidence')
+retail_prediction_pi <- predict(object = retail_train_model, newdata = test_retail, interval = 'prediction')
+
+
+ret_pred_df <- data.frame(retail_prediction, test_retail$Ret18)
+ret_pred_df <- ret_pred_df %>%
+  mutate(diff = retail_prediction - test_retail$Ret18) %>%
+  mutate(over_under = ifelse(diff >= 0, 'Over', 'Under'))
+
+ret_over <- length(ret_pred_df[ret_pred_df$over_under == 'Over', 4]) / length(ret_pred_df[, 4])
+ret_under <- length(ret_pred_df[ret_pred_df$over_under == 'Under', 4]) / length(ret_pred_df[, 4])
+
+max(ret_pred_df$diff)
+min(ret_pred_df$diff)
+ret_over
+ret_under
+
+all_retail_pred <- cbind(ret_pred_df,retail_prediction_ci, retail_prediction_pi)
+all_retail_pred <- all_retail_pred[c(1,2,6,7,9,10)]
+colnames(all_retail_pred) <- c('predicted', 'actual', 'ci_lwr', 'ci_upr', 'pi_lwr', 'pi_upr')
+
+newx = seq(1, 30, by = 1)
+plot(all_retail_pred$actual, ylim=c(-150, 170),
+     xlab = 'Actual observation',
+     ylab = 'Return %',
+     main= 'Retail Prediction and Confidence Intervals')
+lines(newx, all_retail_pred$ci_lwr, col = 'blue', lty = 2)
+lines(newx, all_retail_pred$ci_upr, col = 'blue', lty = 2)
+lines(newx, all_retail_pred$pi_lwr, col = 'red', lty = 2)
+lines(newx, all_retail_pred$pi_upr, col = 'red', lty = 2)
+legend('bottomleft', 
+       legend = c('Actual observation', 'Confidence Interval', 'Prediction Interval'), 
+       col = c('black', 'blue', 'red'),
+       lty = 2, cex = 0.7)
+```
+
+Comparing the prediction with actual values:
+```{r}
+# plot(retail_prediction - test_retail$Ret18, type = 'h')
+plot(retail_prediction - test_retail$Ret18, type = 'h', main = 'Retail Model Errors')
+summary(retail_prediction)
+summary(test_retail$Ret18)
+
+hist(retail_prediction, breaks = 5)
+hist(test_retail$Ret18, breaks = 5)
+range(retail_prediction)[2] - range(retail_prediction)[1]
+range(test_retail$Ret18)[2] - range(test_retail$Ret18)[1]
+```
+We can see that the model performs reasonably well on the test data. 
+```{r}
+sd(retail_prediction)
+sd(clean_retail_data$Ret18)
+```
+
+
+```{r}
+plot(test_retail$Ret18, type = 'p', col = 'black')
+lines(retail_prediction, type = 'p', col = 'red')
+
+bar_ret <- table(retail_prediction, test_retail$Ret18)
+
+boxplot(ret_pred_df[c(1,2)])
+
+
+rmse <- sqrt((mean(retail_prediction - test_retail$Ret18)**2))
+rmse
+
+
+cor(retail_prediction, test_retail$Ret18) 
+```
+
+
+
+
+```{r}
+ret_pred_df <- data.frame(retail_prediction, test_retail$Ret18)
+ret_pred_df <- ret_pred_df %>%
+  mutate(diff = retail_prediction - test_retail$Ret18) %>%
+  mutate(over_under = ifelse(diff >= 0, 'Over', 'Under'))
+
+
+ret_over <- length(ret_pred_df[ret_pred_df$over_under == 'Over', 4]) / length(ret_pred_df[, 4])
+ret_under <- length(ret_pred_df[ret_pred_df$over_under == 'Under', 4]) / length(ret_pred_df[, 4])
+
+
+max(ret_pred_df$diff)
+min(ret_pred_df$diff)
+ret_over
+ret_under
+```
+
+# Step 2 (Industrial Sector)
+
+```{r}
+print(summary(clean_indust_data))
+```
+
+Comparing the median and mean values in the above summaries, it appears that many of the variables are positively skewed. Comparing the max values with the mean values also suggests that outliers exist. We will be able to visualise these outliers and skewed distributions by plotting the data.
+
+```{r}
+ind_cors <- cor(clean_indust_data, clean_indust_data$Ret18, use = 'complete.obs')
+ind_cors
+```
+
+```{r}
+  
+boxplot(norm_indust_data)
+title(main = "Industrial")
+
+```
+
+https://stats.stackexchange.com/questions/11000/how-does-r-handle-missing-values-in-lm
+
+```{r}
+hist(clean_indust_data$MktPrice, breaks = 10)
+hist(log(clean_indust_data$MktPrice), breaks = 10)
+
+clean_indust_data$MktPrice <- log(clean_indust_data$MktPrice)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="MktPrice"] <- "log_MktPrice"
+
+plot(clean_indust_data$log_MktPrice, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_MktPrice, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+
+```
+
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: Linear relationship
+Residuals v Fitted: linear, somewhat equal variance of errors
+Q-Q: somewhat normal
+Scale-Location: somewhat equal spread, could be more convincing
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship with no significant p-value
+Conclusion: will not include in initial model 
+
+
+```{r}
+hist(clean_indust_data$TotMktCap, breaks = 10)
+hist(log(base = 2, clean_indust_data$TotMktCap), breaks = 10)
+
+clean_indust_data$TotMktCap <- log(clean_indust_data$TotMktCap)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="TotMktCap"] <- "log_TotMktCap"
+
+plot(clean_indust_data$log_TotMktCap, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_TotMktCap, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by lognormal function and improved distribution
+Scatter: weak relationship
+Residuals v Fitted: weak linear, heteroscedastic in places
+Q-Q: normal
+Scale-Location: heteroscedastic
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship but no significant p-value
+Conclusion: will not include in initial model
+
+```{r}
+hist(clean_indust_data$DivYield, breaks = 10)
+hist(log(clean_indust_data$DivYield), breaks = 10)
+hist(1 / clean_indust_data$DivYield, breaks = 10)
+hist(clean_indust_data$DivYield ** (1/2), breaks = 10)
+
+clean_indust_data$DivYield <- clean_indust_data$DivYield ** (1/2)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="DivYield"] <- "sqrt_DivYield"
+
+plot(clean_indust_data$sqrt_DivYield, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_DivYield, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by square root function and improved normality assumption
+Scatter: negative linear relationship
+Residuals v Fitted: somewhat linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: equal spread except at the extremes of fitted values
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship with significant p-value
+Conclusion: will include in initial model (Rsq 15.7%)
+
+```{r}
+hist(clean_indust_data$PERatio, breaks = 10)
+hist(log(clean_indust_data$PERatio), breaks = 10)
+hist(clean_indust_data$PERatio ** (1/2), breaks = 10)
+
+clean_indust_data$PERatio <- log(clean_indust_data$PERatio)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="PERatio"] <- "log_PERatio"
+
+plot(clean_indust_data$log_PERatio, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_PERatio, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by lognormal function and improved normality assumption, albeit with outlier
+Scatter:linear relationship
+Residuals v Fitted: weak linear, mostly equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors
+Residuals v Leverage: no outlier issue
+
+LM Summary: positive relationship with significant p-value
+Conclusion: will include in initial model (Rsq 23.06%)
+
+```{r}
+hist(clean_indust_data$Beta, breaks = 10)
+plot(clean_indust_data$Beta, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ Beta, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red',lw = 2)
+plot(mod)
+```
+Histogram: normally distributed
+Scatter: no obvious or strong relationship as per the fitted line
+Residuals v Fitted: shapeless and equally spread above 0, implying linearity and homoscedasticity
+Q-Q: normal distribution
+Scale-Location: The line is mostly flat implying homoscedasticity (equal variance)
+Residuals v Leverage: No points beyond the dashed lines, implying no overly influencial points
+
+LM Summary: positive relationship with Ret18 but not statistically significant with p-value of 0.575 > 0.05. Therefore not included in the initial model
+Conclusion: not included in the initial model, but left for selection in stepwise
+
+
+```{r}
+hist(clean_indust_data$TotalSales17, breaks = 10)
+hist(log(clean_indust_data$TotalSales17), breaks = 10)
+# hist(1 / log10(clean_indust_data$TotalSales17))
+
+clean_indust_data$TotalSales17 <- log(clean_indust_data$TotalSales17)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="TotalSales17"] <- "log_TotalSales17"
+
+plot(clean_indust_data$log_TotalSales17, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_TotalSales17, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: linear relationship
+Residuals v Fitted: linear, mostly equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors, heteroscedastic towards the higher fitted values
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship but no significant p-value
+Conclusion: will not include in initial model
+
+```{r}
+hist(clean_indust_data$CapEmp, breaks = 10)
+hist(log(clean_indust_data$CapEmp), breaks = 10)
+hist(1 / clean_indust_data$CapEmp, breaks = 10)
+
+clean_indust_data$CapEmp <- log(clean_indust_data$CapEmp)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="CapEmp"] <- "log_CapEmp"
+
+plot(clean_indust_data$log_CapEmp, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_CapEmp, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by lognormal function and slightly improved normality assumption
+Scatter: weak linear relationship
+Residuals v Fitted: weak linear, equal variance but clustered
+Q-Q: normal
+Scale-Location: somewhat equal spread of errors
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship but no significant p-value
+Conclusion: will not include in initial model
+
+
+```{r}
+hist(clean_indust_data$Dividend, breaks = 10)
+hist(log(clean_indust_data$Dividend), breaks = 10)
+
+clean_indust_data$Dividend <- log(clean_indust_data$Dividend)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="Dividend"] <- "log_Dividend"
+
+plot(clean_indust_data$log_Dividend, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_Dividend, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+
+Histogram: tranformed by lognormal function and improved normality assumption
+Scatter: negative linear relationship
+Residuals v Fitted: weak linear, qustionable equal variance
+Q-Q: normal
+Scale-Location: heteroscedastic
+Residuals v Leverage: no strong outlier issue
+
+LM Summary: negative relationship and significant p-value
+Conclusion: will include in initial model (Rsq 10.2%%) despite questionable normality assumptions. proceeding with caution
+
+```{r}
+hist(clean_indust_data$MktBook, breaks = 10)
+plot(clean_indust_data$MktBook, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ MktBook, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: outliers, otherwise appears normally distributed
+Scatter: no clear relationship
+Residuals v Fitted: no clear relationship and mostly equally spread errors
+Q-Q: close or on the ine, some normal distribution
+Scale-Location: mostly homoscedastic
+Residuals v Leverage: Obsevation 14 close to dashed line, strong influence on relationship
+
+LM Summary: slight negative relationship but p-value of 0.954 > 0.05
+
+Conculsion: Initially excluded from model
+
+
+```{r}
+hist(clean_indust_data$Ret17)
+plot(clean_indust_data$Ret17, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ Ret17, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: appears normally distributed
+Scatter: appears to be no strong relationship
+Residuals v Fitted: No strong linear relationship, fairly even spread of errors though
+Q-Q: Mostly normally distributed
+Scale-Location: mostly even spread of errors
+Residuals v Leverage: no strong influence
+
+LM Summary: weak positive relationship, p-value 0.3132 > 0.05
+
+Conclusion: Unlikely to add explanatory power
+
+
+```{r}
+hist(clean_indust_data$EPS, breaks = 10)
+hist(log(clean_indust_data$EPS), breaks = 10)
+
+clean_indust_data$EPS <- log(clean_indust_data$EPS)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="EPS"] <- "log_EPS"
+
+plot(clean_indust_data$log_EPS, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_EPS, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: ransformed lognormally and appears more normally distributed
+Scatter: weak linear relationship
+Residuals v Fitted: even spread, weak linear
+Q-Q: mostly normal
+Scale-Location: mostly homoscedastic
+Residuals v Leverage: no extreme influence
+
+LM summary: Negative relationship with p-value > 0.05
+Conclusion: Not to be included in intial model
+
+
+```{r}
+hist(clean_indust_data$Earnings, breaks = 10)
+hist(clean_indust_data$Earnings ** (1/2), breaks = 10)
+
+clean_indust_data$Earnings <- clean_indust_data$Earnings ** (1/2)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="Earnings"] <- "sqrt_Earnings"
+
+plot(clean_indust_data$sqrt_Earnings, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_Earnings, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: tranformed by square root and improved normal distribution
+Scatter: weak linear realtionship
+Fitted v Residuals: weak linear, uneven spread of errors
+Q-Q: normal
+Scale-Location: not even spread s
+Fitted v Leverage: no influencial outliers, despite observation approaching the dashed line
+
+LM Summary: negative relationship, not statistically significant
+
+Conclusion: will not include in initial model
+
+
+```{r}
+hist(clean_indust_data$ROCE, breaks = 10)
+hist(clean_indust_data$ROCE ** (1/2), breaks = 10)
+
+clean_indust_data$ROCE <- clean_indust_data$ROCE ** (1/2)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="ROCE"] <- "sqrt_ROCE"
+
+plot(clean_indust_data$sqrt_ROCE, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ sqrt_ROCE, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: tranformed by square root and improved normal distribution
+Scatter: Linear relationship
+Residuals v Fitted: linear, equal variance
+Q-Q: normal
+Scale-Location: equal spread
+Residuals v Leverage: no outlier issue
+
+LM Summary: negative relationship with significant p-value
+Conclusion: include in initial model (Rsq 5.3%)
+
+```{r}
+hist(clean_indust_data$SPS, breaks = 10)
+hist(log(clean_indust_data$SPS), breaks = 10)
+
+clean_indust_data$SPS<- log(clean_indust_data$SPS)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="SPS"] <- "log_SPS"
+
+plot(clean_indust_data$log_SPS, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_SPS, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+
+```{r}
+hist(clean_indust_data$ProfMarg, breaks = 10)
+hist(clean_indust_data$ProfMarg ** (1/3), breaks = 10)
+hist(log(clean_indust_data$ProfMarg), breaks = 10)
+
+clean_indust_data$ProfMarg<- log(clean_indust_data$ProfMarg)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="ProfMarg"] <- "log_ProfMarg"
+
+plot(clean_indust_data$log_ProfMarg, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_ProfMarg, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: negative linear relationship
+Residuals v Fitted: linear, even spread
+Q-Q: normal
+Scale-Location: less obvious even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: negative relationship and statistically significant
+
+Conclusion: Included in intial model (Rsq = 6.2%)
+
+```{r}
+hist(clean_indust_data$BookVal, breaks = 10)
+hist(log(clean_indust_data$BookVal), breaks = 10)
+
+clean_indust_data$BookVal <- log(clean_indust_data$BookVal)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="BookVal"] <- "log_BookVal"
+
+clean_indust_data <- na.omit(clean_indust_data)
+
+plot(clean_indust_data$log_BookVal, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_BookVal, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormal transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, somewhat even spread of errors
+Q-Q: normal
+Scale-Location: somewhat even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+```{r}
+hist(clean_indust_data$BVPS, breaks = 10)
+hist(log(clean_indust_data$BVPS), breaks = 10)
+hist(clean_indust_data$BVPS ** (1/3), breaks = 10)
+
+clean_indust_data$BVPS <- clean_indust_data$BVPS ** (1/3)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="BVPS"] <- "cbrt_BVPS"
+
+plot(clean_indust_data$cbrt_BVPS, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ cbrt_BVPS, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: cube root transformation improved normal distribution
+Scatter: some positive linear relationship
+Residuals v Fitted: linear, questionable even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+```{r}
+hist(clean_indust_data$PayoutRatio, breaks = 10)
+hist(log(clean_indust_data$PayoutRatio), breaks = 10)
+
+clean_indust_data$PayoutRatio <- log(clean_indust_data$PayoutRatio)
+colnames(clean_indust_data)[colnames(clean_indust_data)=="PayoutRatio"] <- "log_PayoutRatio"
+
+plot(clean_indust_data$log_PayoutRatio, clean_indust_data$Ret18)
+mod <- lm(Ret18 ~ log_PayoutRatio, data = clean_indust_data)
+print(summary(mod))
+abline(mod, col = 'red', lw = 2)
+plot(mod)
+```
+Histogram: lognormaltransformation improved normal distribution
+Scatter: weak relationship
+Residuals v Fitted: weak linear, even spread
+Q-Q: normal
+Scale-Location: mostly even spread errors, heteroscedastic at points
+Residuals v Leverage: no strong outlier influence
+
+LM Summary: positive relationship but not statistically significant
+
+Conclusion: Not included in intial model
+
+
+
+## Initial Model 
+
+Variables to be used in the initial model are:
+sqrt_DivYield, log_PERatio, log_Dividend, sqrt_ROCE, log_ProfMarg
+
+Top Simple Linear Regression model is using sqrt_PERatio with Rsq > 23%
+
+Rsq in that order above are: 
+15.7%, 23%, 10.2%, 5.3%, 6.2%
+
+There may be collinearity between dependent variables:
+
+```{r}
+plot(clean_indust_data[c('sqrt_DivYield', 'log_PERatio', 'log_Dividend', 'sqrt_ROCE', 'log_ProfMarg', 'Ret18')])
+```
+
+
+```{r}
+cor(clean_indust_data[c('sqrt_DivYield', 'log_PERatio', 'log_Dividend', 'sqrt_ROCE', 'log_ProfMarg', 'Ret18')])
+```
+
+- sqrt_ROCE and log_ProfMarg showing strong correlation
+
+we could try to aggregate these values together somehow, or delete
+
+Splitting the data into Training and Test samples
+```{r}
+indust_smp_size <- floor(0.6 * nrow(clean_indust_data))
+
+set.seed(7)
+train_index <- sample(seq_len(nrow(clean_indust_data)), size = indust_smp_size)
+
+train_indust <- clean_indust_data[train_index, ]
+test_indust <- clean_indust_data[-train_index, ]
+
+test_indust
+```
+
+
+
+
+with no deletion:
+
+```{r}
+initial_mod <- lm(Ret18 ~ sqrt_DivYield + log_PERatio + log_Dividend + sqrt_ROCE + log_ProfMarg, data = train_indust)
+summary(initial_mod)
+```
+The adjusted Rsq is higher than the Rsq of the log_PERatio SLR model.
+
+Keeping the 2 highest Rsq variables that have a relatively lower correlation with each other:
+log_PERatio and sqrt_DivYield
+
+```{r}
+second_mod <- lm(Ret18 ~ log_PERatio + sqrt_DivYield, data = train_indust)
+summary(second_mod)
+```
+No improvement on intital model
+
+Keeping the 2 initial variables that have the lowest correlation with each other:
+log_ProfMarg and sqrt_DivYield
+
+```{r}
+third_mod <- lm(Ret18 ~ log_ProfMarg + sqrt_DivYield, data = train_indust)
+summary(third_mod)
+```
+
+no improvement on the initial model or second model. 
+
+Despite the issues with collinearity, we will proceed with the initial model and then use a stepwise regression to refine the variables further to achieve the highest Rsq possible
+
+```{r}
+formula(clean_indust_data)
+```
+```{r}
+filtered_vars <- Ret18 ~ log_MktPrice + log_TotMktCap + sqrt_DivYield + log_PERatio + 
+    Beta + log_TotalSales17 + log_CapEmp + log_Dividend + 
+    MktBook + Ret17 + log_EPS + SharesOS + sqrt_Earnings + 
+    sqrt_ROCE + log_SPS + log_ProfMarg + log_BookVal + 
+    cbrt_BVPS + log_PayoutRatio
+```
+
+
+## Stepwise Model
+```{r}
+all_vars <- lm(Ret18 ~ ., data = clean_indust_data)
+step(initial_mod, direction = 'both', scope = filtered_vars)
+```
+Compared to Retail model, there were additions and deletions. Again however, ProfMarg is negative coefficient
+
+```{r}
+indust_train_model <- lm(formula = Ret18 ~ log_Dividend + log_ProfMarg + log_MktPrice, data = train_indust)
+summary(indust_train_model)
+plot(indust_train_model)
+```
+
+The adjusted Rsq has increased from 0.1588 in the initial model to 0.3706 in the final model, a large increase. Let's see how the test set performs.
+
+## Prediction
+
+```{r}
+indust_prediction <- predict(object = indust_train_model, newdata = test_indust)
+indust_prediction_ci <- predict(object = indust_train_model, newdata = test_indust, interval = 'confidence')
+indust_prediction_pi <- predict(object = indust_train_model, newdata = test_indust, interval = 'prediction')
+
+
+ind_pred_df <- data.frame(indust_prediction, test_indust$Ret18)
+ind_pred_df <- ind_pred_df %>%
+  mutate(diff = indust_prediction - test_indust$Ret18) %>%
+  mutate(over_under = ifelse(diff >= 0, 'Over', 'Under'))
+
+
+ind_over <- length(ind_pred_df[ind_pred_df$over_under == 'Over', 4]) / length(ind_pred_df[, 4])
+ind_under <- length(ind_pred_df[ind_pred_df$over_under == 'Under', 4]) / length(ind_pred_df[, 4])
+
+ind_over
+ind_under
+
+all_indust_pred <- cbind(ind_pred_df,indust_prediction_ci, indust_prediction_pi)
+all_indust_pred <- all_indust_pred[c(1,2,6,7,9,10)]
+colnames(all_indust_pred) <- c('predicted', 'actual', 'ci_lwr', 'ci_upr', 'pi_lwr', 'pi_upr')
+
+newx = seq(1, 30, by = 1)
+plot(all_indust_pred$actual, ylim=c(-150, 250),
+     xlab = 'Actual observation',
+     ylab = 'Return %',
+     main= 'Industrial Prediction and Confidence Intervals')
+lines(newx, all_indust_pred$ci_lwr, col = 'blue', lty = 2)
+lines(newx, all_indust_pred$ci_upr, col = 'blue', lty = 2)
+lines(newx, all_indust_pred$pi_lwr, col = 'red', lty = 2)
+lines(newx, all_indust_pred$pi_upr, col = 'red', lty = 2)
+legend('bottomright', 
+       legend = c('Actual observation', 'Confidence Interval', 'Prediction Interval'), 
+       col = c('black', 'blue', 'red'),
+       lty = 1:3, cex = 0.7)
+
+
+```
+
+Comparing the prediction with actual values:
+```{r}
+plot(indust_prediction - test_indust$Ret18, type = 'h', main = 'Model Errors')
+summary(indust_prediction)
+summary(test_indust$Ret18)
+boxplot(indust_prediction, test_indust$Ret18)
+hist(indust_prediction, breaks = 5)
+hist(test_indust$Ret18, breaks = 5)
+range(indust_prediction)[2]-range(indust_prediction)[1]
+range(test_indust$Ret18)[2]-range(test_indust$Ret18)[1]
+sd(indust_prediction)
+sd(test_indust$Ret18)
+```
+Visually the model appears to perform less accurately than the Retail sector model. It has predicted a much smaller variation than actually occurred. It also predicts a minimum return > 0 which is unlikely to occur. 
+
+```{r}
+plot(test_indust$Ret18, type = 'p', col = 'black')
+lines(indust_prediction, type = 'p', col = 'red')
+
+rmse <- sqrt(mean(indust_prediction - test_indust$Ret18)**2) 
+rmse
+
+cor(indust_prediction, test_indust$Ret18)
+```
+
+
+```{r}
+boxplot(ind_pred_df[c(1,2)])
+tab <- table(ind_pred_df)
+print(ind_pred_df)
+```
+
+### Fama-French Rsq
+
+```{r}
+ff_retail_mod <- lm(Ret18 ~ Beta + log_TotMktCap + MktBook, data = train_retail)
+summary(ff_retail_mod)
+```
+```{r}
+ff_indust_mod <- lm(Ret18 ~ Beta + log_TotMktCap + MktBook, data = train_indust)
+summary(ff_indust_mod)
+```
+
+
+
+
+
+
+
+
